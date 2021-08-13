@@ -645,7 +645,6 @@ bool populate_from_column(
     int32_t column,
     ecs_entity_t source,
     ecs_id_t *id_out,
-    ecs_type_t *type_out,
     ecs_entity_t *subject_out,
     ecs_size_t *size_out,
     void **ptr_out)
@@ -697,7 +696,6 @@ bool populate_from_column(
         }
     }
 
-    *type_out = NULL;
     *id_out = id;
 
     return has_data;
@@ -730,7 +728,6 @@ bool flecs_filter_match_table(
     ecs_type_t type,
     ecs_id_t *ids,
     int32_t *columns,
-    ecs_type_t *types,
     ecs_entity_t *subjects,
     ecs_size_t *sizes,
     void **ptrs)
@@ -805,15 +802,13 @@ bool flecs_filter_match_table(
 
         if (columns && result) {
             ecs_assert(ids != NULL, ECS_INTERNAL_ERROR, NULL);
-            ecs_assert(types != NULL, ECS_INTERNAL_ERROR, NULL);
             ecs_assert(subjects != NULL, ECS_INTERNAL_ERROR, NULL);
 
             int32_t t_i = term->index;
 
             void **ptr = ptrs ? &ptrs[t_i] : NULL;
             populate_from_column(world, table, term->id, column, 
-                source, &ids[t_i], &types[t_i], &subjects[t_i], &sizes[t_i], 
-                ptr);
+                source, &ids[t_i], &subjects[t_i], &sizes[t_i], ptr);
 
             if (column != -1) {
                 columns[t_i] = column + 1;
@@ -991,7 +986,6 @@ bool ecs_term_next(
     it->table = table;
     it->data = data;
     it->ids = &iter->id;
-    it->types = &iter->type;
     it->columns = &iter->column;
     it->subjects = &iter->subject;
     it->sizes = &iter->size;
@@ -1003,7 +997,7 @@ bool ecs_term_next(
     it->is_valid = true;
 
     bool has_data = populate_from_column(world, table, term->id, tr->column, 
-        source, &iter->id, &iter->type, &iter->subject, &iter->size, 
+        source, &iter->id, &iter->subject, &iter->size, 
         &iter->ptr);
 
     if (!source) {
@@ -1137,7 +1131,7 @@ bool ecs_filter_next(
 
             table = tr->table;
             match = flecs_filter_match_table(world, filter, table, table->type,
-                it->ids, it->columns, it->types, it->subjects, it->sizes, 
+                it->ids, it->columns, it->subjects, it->sizes, 
                 it->ptrs);
         } while (!match);
 
