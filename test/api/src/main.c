@@ -882,6 +882,8 @@ void Filter_filter_iter_10_tags(void);
 void Filter_filter_iter_20_tags(void);
 void Filter_filter_iter_10_components(void);
 void Filter_filter_iter_20_components(void);
+void Filter_term_iter_type_set(void);
+void Filter_filter_iter_type_set(void);
 
 // Testsuite 'Query'
 void Query_query_changed_after_new(void);
@@ -929,6 +931,7 @@ void Query_query_iter_10_tags(void);
 void Query_query_iter_20_tags(void);
 void Query_query_iter_10_components(void);
 void Query_query_iter_20_components(void);
+void Query_iter_type_set(void);
 
 // Testsuite 'Pairs'
 void Pairs_type_w_one_pair(void);
@@ -1039,6 +1042,7 @@ void Trigger_set_get_binding_context(void);
 void Trigger_trigger_w_self(void);
 void Trigger_delete_trigger_w_delete_ctx(void);
 void Trigger_trigger_w_index(void);
+void Trigger_iter_type_set(void);
 
 // Testsuite 'Observer'
 void Observer_2_terms_w_on_add(void);
@@ -1067,6 +1071,7 @@ void Observer_add_after_delete_observer(void);
 void Observer_remove_after_delete_observer(void);
 void Observer_delete_observer_w_ctx(void);
 void Observer_filter_w_strings(void);
+void Observer_iter_type_set(void);
 
 // Testsuite 'TriggerOnAdd'
 void TriggerOnAdd_setup(void);
@@ -5143,6 +5148,14 @@ bake_test_case Filter_testcases[] = {
     {
         "filter_iter_20_components",
         Filter_filter_iter_20_components
+    },
+    {
+        "term_iter_type_set",
+        Filter_term_iter_type_set
+    },
+    {
+        "filter_iter_type_set",
+        Filter_filter_iter_type_set
     }
 };
 
@@ -5326,6 +5339,10 @@ bake_test_case Query_testcases[] = {
     {
         "query_iter_20_components",
         Query_query_iter_20_components
+    },
+    {
+        "iter_type_set",
+        Query_iter_type_set
     }
 };
 
@@ -5756,6 +5773,10 @@ bake_test_case Trigger_testcases[] = {
     {
         "trigger_w_index",
         Trigger_trigger_w_index
+    },
+    {
+        "iter_type_set",
+        Trigger_iter_type_set
     }
 };
 
@@ -5863,6 +5884,10 @@ bake_test_case Observer_testcases[] = {
     {
         "filter_w_strings",
         Observer_filter_w_strings
+    },
+    {
+        "iter_type_set",
+        Observer_iter_type_set
     }
 };
 
@@ -8837,14 +8862,14 @@ static bake_test_suite suites[] = {
         "Filter",
         NULL,
         NULL,
-        50,
+        52,
         Filter_testcases
     },
     {
         "Query",
         NULL,
         NULL,
-        45,
+        46,
         Query_testcases
     },
     {
@@ -8858,14 +8883,14 @@ static bake_test_suite suites[] = {
         "Trigger",
         NULL,
         NULL,
-        49,
+        50,
         Trigger_testcases
     },
     {
         "Observer",
         NULL,
         NULL,
-        26,
+        27,
         Observer_testcases
     },
     {
@@ -8991,11 +9016,7 @@ static bake_test_suite suites[] = {
         "World",
         World_setup,
         NULL,
-<<<<<<< HEAD
-        37,
-=======
-        34,
->>>>>>> d33048fa... #472 update C tests
+        36,
         World_testcases
     },
     {
