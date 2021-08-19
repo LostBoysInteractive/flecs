@@ -773,13 +773,6 @@ struct ecs_data_t {
     ecs_bs_column_t *bs_columns; /* Bitset columns */
 };
 
-/** Small footprint data structure for storing data associated with a table. */
-typedef struct ecs_table_leaf_t {
-    ecs_table_t *table;
-    ecs_type_t type;
-    ecs_data_t *data;
-} ecs_table_leaf_t;
-
 /** Flags for quickly checking for special properties of a table. */
 #define EcsTableHasBuiltins         1u    /* Does table have builtin components */
 #define EcsTableIsPrefab            2u    /* Does the table store prefabs */
@@ -832,7 +825,7 @@ struct ecs_table_t {
     ecs_flags32_t flags;             /* Flags for testing table properties */
     int32_t column_count;            /* Number of data columns in table */
 
-    ecs_data_t *data;                /* Component storage */
+    ecs_data_t storage;              /* Component storage */
     ecs_type_info_t **c_info;        /* Cached pointers to component info */
 
     ecs_edge_t *lo_edges;            /* Edges to other tables */
@@ -1598,21 +1591,12 @@ void flecs_run_set_systems(
 /** Find or create table for a set of components */
 ecs_table_t* flecs_table_find_or_create(
     ecs_world_t *world,
-    const ecs_ids_t *type);   
-
-/* Get table data */
-ecs_data_t *flecs_table_get_data(
-    const ecs_table_t *table);
-
-/* Get or create data */
-ecs_data_t *flecs_table_get_or_create_data(
-    ecs_table_t *table);
+    const ecs_ids_t *type);
 
 /* Initialize columns for data */
-ecs_data_t* flecs_init_data(
+void flecs_table_init_data(
     ecs_world_t *world,
-    ecs_table_t *table,
-    ecs_data_t *result); 
+    ecs_table_t *table); 
 
 /* Clear all entities from a table. */
 void flecs_table_clear_entities(
@@ -1729,7 +1713,7 @@ void flecs_table_replace_data(
     ecs_data_t *data);
 
 /* Merge data of one table into another table */
-ecs_data_t* flecs_table_merge(
+void flecs_table_merge(
     ecs_world_t *world,
     ecs_table_t *new_table,
     ecs_table_t *old_table,
@@ -2372,10 +2356,9 @@ const char* ecs_strerror(
     return "unknown error code";
 }
 
-ecs_data_t* flecs_init_data(
+void flecs_table_init_data(
     ecs_world_t *world,
-    ecs_table_t *table,
-    ecs_data_t *result)
+    ecs_table_t *table)
 {
     ecs_type_t type = table->type; 
     int32_t i, 
@@ -2383,22 +2366,23 @@ ecs_data_t* flecs_init_data(
     sw_count = table->sw_column_count,
     bs_count = table->bs_column_count;
 
+    ecs_data_t *storage = &table->storage;
+
     /* Root tables don't have columns */
     if (!count && !sw_count && !bs_count) {
-        result->columns = NULL;
-        return result;
+        storage->columns = NULL;
     }
 
     ecs_entity_t *entities = ecs_vector_first(type, ecs_entity_t);
 
     if (count && !sw_count) {
-        result->columns = ecs_os_calloc(ECS_SIZEOF(ecs_column_t) * count);    
+        storage->columns = ecs_os_calloc_n(ecs_column_t, count);    
     } else if (count || sw_count) {
         /* If a table has switch columns, store vector with the case values
             * as a regular column, so it's easier to access for systems. To
             * enable this, we need to allocate more space. */
         int32_t type_count = ecs_vector_count(type);
-        result->columns = ecs_os_calloc(ECS_SIZEOF(ecs_column_t) * type_count);
+        storage->columns = ecs_os_calloc_n(ecs_column_t, type_count);
     }
 
     if (count) {
@@ -2411,8 +2395,8 @@ ecs_data_t* flecs_init_data(
                 /* Is the component associated wit a (non-empty) type? */
                 if (component->size) {
                     /* This is a regular component column */
-                    result->columns[i].size = flecs_to_i16(component->size);
-                    result->columns[i].alignment = flecs_to_i16(component->alignment);
+                    storage->columns[i].size = flecs_to_i16(component->size);
+                    storage->columns[i].alignment = flecs_to_i16(component->alignment);
                 } else {
                     /* This is a tag */
                 }
@@ -2424,7 +2408,7 @@ ecs_data_t* flecs_init_data(
 
     if (sw_count) {
         int32_t sw_offset = table->sw_column_offset;
-        result->sw_columns = ecs_os_calloc(ECS_SIZEOF(ecs_sw_column_t) * sw_count);
+        storage->sw_columns = ecs_os_calloc(ECS_SIZEOF(ecs_sw_column_t) * sw_count);
 
         for (i = 0; i < sw_count; i ++) {
             ecs_entity_t e = entities[i + sw_offset];
@@ -2441,24 +2425,22 @@ ecs_data_t* flecs_init_data(
                 sw_array[0], 
                 sw_array[sw_array_count - 1], 
                 0);
-            result->sw_columns[i].data = sw;
-            result->sw_columns[i].type = sw_type;
+            storage->sw_columns[i].data = sw;
+            storage->sw_columns[i].type = sw_type;
 
             int32_t column_id = i + table->sw_column_offset;
-            result->columns[column_id].data = flecs_switch_values(sw);
-            result->columns[column_id].size = sizeof(ecs_entity_t);
-            result->columns[column_id].alignment = ECS_ALIGNOF(ecs_entity_t);
+            storage->columns[column_id].data = flecs_switch_values(sw);
+            storage->columns[column_id].size = sizeof(ecs_entity_t);
+            storage->columns[column_id].alignment = ECS_ALIGNOF(ecs_entity_t);
         }
     }
     
     if (bs_count) {
-        result->bs_columns = ecs_os_calloc(ECS_SIZEOF(ecs_bs_column_t) * bs_count);
+        storage->bs_columns = ecs_os_calloc(ECS_SIZEOF(ecs_bs_column_t) * bs_count);
         for (i = 0; i < bs_count; i ++) {
-            flecs_bitset_init(&result->bs_columns[i].data);
+            flecs_bitset_init(&storage->bs_columns[i].data);
         }
     }
-
-    return result;
 }
 
 static
@@ -2832,8 +2814,7 @@ void register_query(
         ecs_query_t **q = ecs_vector_add(&table->queries, ecs_query_t*);
         if (q) *q = query;
 
-        ecs_data_t *data = flecs_table_get_data(table);
-        if (data && ecs_vector_count(data->entities)) {
+        if (ecs_table_count(table)) {
             table_activate(world, table, query, true);
         }
     }
@@ -2881,27 +2862,6 @@ void unregister_query(
         /* Remove query */
         ecs_vector_remove(table->queries, ecs_query_t*, i);        
     }
-}
-
-ecs_data_t* flecs_table_get_data(
-    const ecs_table_t *table)
-{
-    ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
-
-    return table->data;
-}
-
-ecs_data_t* flecs_table_get_or_create_data(
-    ecs_table_t *table)
-{
-    ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
-    ecs_assert(!table->lock, ECS_LOCKED_STORAGE, NULL);
-
-    ecs_data_t *data = table->data;
-    if (!data) {
-        data = table->data = ecs_os_calloc(ECS_SIZEOF(ecs_data_t));
-    }
-    return data;
 }
 
 static
@@ -3080,7 +3040,7 @@ void fini_data(
     /* Sanity check */
     ecs_assert(ecs_vector_count(data->record_ptrs) == 
         ecs_vector_count(data->entities), ECS_INTERNAL_ERROR, NULL);
-    
+
     ecs_column_t *columns = data->columns;
     if (columns) {
         int32_t c, column_count = table->column_count;
@@ -3140,8 +3100,7 @@ void flecs_table_clear_entities_silent(
     ecs_world_t *world,
     ecs_table_t *table)
 {
-    fini_data(world, table, flecs_table_get_data(table), 
-        false, true, false, true);
+    fini_data(world, table, &table->storage, false, true, false, true);
 }
 
 /* Cleanup, run OnRemove, clear entity index, deactivate table */
@@ -3149,7 +3108,7 @@ void flecs_table_clear_entities(
     ecs_world_t *world,
     ecs_table_t *table)
 {
-    fini_data(world, table, flecs_table_get_data(table), true, true, false, true);
+    fini_data(world, table, &table->storage, true, true, false, true);
 }
 
 /* Cleanup, run OnRemove, delete from entity index, deactivate table */
@@ -3157,7 +3116,7 @@ void flecs_table_delete_entities(
     ecs_world_t *world,
     ecs_table_t *table)
 {
-    fini_data(world, table, flecs_table_get_data(table), true, true, true, true);
+    fini_data(world, table, &table->storage, true, true, true, true);
 }
 
 /* Unset all components in table. This function is called before a table is 
@@ -3167,10 +3126,7 @@ void flecs_table_remove_actions(
     ecs_table_t *table)
 {
     (void)world;
-    ecs_data_t *data = flecs_table_get_data(table);
-    if (data) {
-        run_on_remove(world, table, data);
-    }   
+    run_on_remove(world, table, &table->storage);
 }
 
 /* Free table resources. */
@@ -3188,8 +3144,7 @@ void flecs_table_free(
 #endif    
 
     /* Cleanup data, no OnRemove, delete from entity index, don't deactivate */
-    ecs_data_t *data = flecs_table_get_data(table);
-    fini_data(world, table, data, false, true, true, false);
+    fini_data(world, table, &table->storage, false, true, true, false);
 
     flecs_table_clear_edges(world, table);
 
@@ -3217,8 +3172,6 @@ void flecs_table_free(
     }
 
     table->id = 0;
-
-    ecs_os_free(table->data);
 }
 
 /* Free table type. Do this separately from freeing the table as types can be
@@ -3370,57 +3323,6 @@ void move_bitset_columns(
 }
 
 static
-void ensure_data(
-    ecs_world_t *world,
-    ecs_table_t *table,
-    ecs_data_t * data,
-    int32_t * column_count_out,
-    int32_t * sw_column_count_out,
-    int32_t * bs_column_count_out,
-    ecs_column_t ** columns_out,
-    ecs_sw_column_t ** sw_columns_out,
-    ecs_bs_column_t ** bs_columns_out)
-{
-    int32_t column_count = table->column_count;
-    int32_t sw_column_count = table->sw_column_count;
-    int32_t bs_column_count = table->bs_column_count;
-    ecs_column_t *columns = NULL;
-    ecs_sw_column_t *sw_columns = NULL;
-    ecs_bs_column_t *bs_columns = NULL;
-
-    /* It is possible that the table data was created without content. 
-     * Now that data is going to be written to the table, initialize */ 
-    if (column_count | sw_column_count | bs_column_count) {
-        columns = data->columns;
-        sw_columns = data->sw_columns;
-        bs_columns = data->bs_columns;
-
-        if (!columns && !sw_columns && !bs_columns) {
-            flecs_init_data(world, table, data);
-            columns = data->columns;
-            sw_columns = data->sw_columns;
-            bs_columns = data->bs_columns;
-
-            ecs_assert(sw_column_count == 0 || sw_columns != NULL, 
-                ECS_INTERNAL_ERROR, NULL);
-            ecs_assert(bs_column_count == 0 || bs_columns != NULL, 
-                ECS_INTERNAL_ERROR, NULL);
-        }
-
-        *column_count_out = column_count;
-        *sw_column_count_out = sw_column_count;
-        *bs_column_count_out = bs_column_count;
-        *columns_out = columns;
-        *sw_columns_out = sw_columns;
-        *bs_columns_out = bs_columns;
-    }
-
-    ecs_assert(!column_count || columns, ECS_INTERNAL_ERROR, NULL);
-    ecs_assert(!sw_column_count || sw_columns, ECS_INTERNAL_ERROR, NULL);
-    ecs_assert(!bs_column_count || bs_columns, ECS_INTERNAL_ERROR, NULL);
-}
-
-static
 void grow_column(
     ecs_world_t *world,
     ecs_entity_t * entities,
@@ -3510,11 +3412,9 @@ int32_t grow_data(
     int32_t column_count = table->column_count;
     int32_t sw_column_count = table->sw_column_count;
     int32_t bs_column_count = table->bs_column_count;
-    ecs_column_t *columns = NULL;
-    ecs_sw_column_t *sw_columns = NULL;
-    ecs_bs_column_t *bs_columns = NULL;
-    ensure_data(world, table, data, &column_count, &sw_column_count, 
-        &bs_column_count, &columns, &sw_columns, &bs_columns);    
+    ecs_column_t *columns = data->columns;
+    ecs_sw_column_t *sw_columns = data->sw_columns;
+    ecs_bs_column_t *bs_columns = data->bs_columns; 
 
     /* Add record to record ptr array */
     ecs_vector_set_size(&data->record_ptrs, ecs_record_t*, size);
@@ -3618,17 +3518,9 @@ int32_t flecs_table_append(
      * arrays will realloc */
     int32_t count = ecs_vector_count(data->entities);
     int32_t size = ecs_vector_size(data->entities);
-
     int32_t column_count = table->column_count;
-    int32_t sw_column_count = table->sw_column_count;
-    int32_t bs_column_count = table->bs_column_count;
-    ecs_column_t *columns = NULL;
-    ecs_sw_column_t *sw_columns = NULL;
-    ecs_bs_column_t *bs_columns = NULL;
-
-    ensure_data(world, table, data, &column_count, &sw_column_count,
-        &bs_column_count, &columns, &sw_columns, &bs_columns);
-
+    ecs_column_t *columns = table->storage.columns;
+    
     /* Grow buffer with entity ids, set new element to new entity */
     ecs_entity_t *e = ecs_vector_add(&data->entities, ecs_entity_t);
     ecs_assert(e != NULL, ECS_INTERNAL_ERROR, NULL);
@@ -3659,6 +3551,11 @@ int32_t flecs_table_append(
         fast_append(columns, column_count);
         return count;
     }
+
+    int32_t sw_column_count = table->sw_column_count;
+    int32_t bs_column_count = table->bs_column_count;
+    ecs_sw_column_t *sw_columns = table->storage.sw_columns;
+    ecs_bs_column_t *bs_columns = table->storage.bs_columns;
 
     ecs_type_info_t **c_info_array = table->c_info;
     ecs_entity_t *entities = ecs_vector_first(
@@ -4073,17 +3970,6 @@ void flecs_table_set_size(
 
     if (cur_count < size) {
         grow_data(world, table, data, 0, size, NULL);
-    } else if (!size) {
-        /* Initialize columns if 0 is passed. This is a shortcut to initialize
-         * columns when, for example, an API call is inserting bulk data. */
-        int32_t column_count = table->column_count;
-        int32_t sw_column_count = table->sw_column_count;
-        int32_t bs_column_count = table->bs_column_count;
-        ecs_column_t *columns;
-        ecs_sw_column_t *sw_columns;
-        ecs_bs_column_t *bs_columns;
-        ensure_data(world, table, data, &column_count, &sw_column_count,
-            &bs_column_count, &columns, &sw_columns, &bs_columns);
     }
 }
 
@@ -4315,7 +4201,6 @@ void merge_table_data(
     ecs_column_t *new_columns = new_data->columns;
 
     if (!new_columns && !new_data->entities) {
-        flecs_init_data(world, new_table, new_data);
         new_columns = new_data->columns;
     }
     
@@ -4438,15 +4323,10 @@ int32_t ecs_table_count(
     const ecs_table_t *table)
 {
     ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
-    ecs_data_t *data = table->data;
-    if (!data) {
-        return 0;
-    }
-
-    return flecs_table_data_count(data);
+    return flecs_table_data_count(&table->storage);
 }
 
-ecs_data_t* flecs_table_merge(
+void flecs_table_merge(
     ecs_world_t *world,
     ecs_table_t *new_table,
     ecs_table_t *old_table,
@@ -4461,18 +4341,18 @@ ecs_data_t* flecs_table_merge(
     /* If there is nothing to merge to, just clear the old table */
     if (!new_table) {
         flecs_table_clear_data(world, old_table, old_data);
-        return NULL;
+        return;
     } else {
         ecs_assert(!new_table->lock, ECS_LOCKED_STORAGE, NULL);
     }
 
     /* If there is no data to merge, drop out */
     if (!old_data) {
-        return NULL;
+        return;
     }
 
     if (!new_data) {
-        new_data = flecs_table_get_or_create_data(new_table);
+        new_data = &new_table->storage;
         if (new_table == old_table) {
             move_data = true;
         }
@@ -4514,8 +4394,6 @@ ecs_data_t* flecs_table_merge(
     if (!new_count && old_count) {
         table_activate(world, new_table, NULL, true);
     }
-
-    return new_data;
 }
 
 void flecs_table_replace_data(
@@ -4524,21 +4402,18 @@ void flecs_table_replace_data(
     ecs_data_t * data)
 {
     int32_t prev_count = 0;
-    ecs_data_t *table_data = table->data;
+    ecs_data_t *table_data = &table->storage;
     ecs_assert(!data || data != table_data, ECS_INTERNAL_ERROR, NULL);
     ecs_assert(!table->lock, ECS_LOCKED_STORAGE, NULL);
 
-    if (table_data) {
-        prev_count = ecs_vector_count(table_data->entities);
-        run_on_remove(world, table, table_data);
-        flecs_table_clear_data(world, table, table_data);
-    }
+    prev_count = ecs_vector_count(table_data->entities);
+    run_on_remove(world, table, table_data);
+    flecs_table_clear_data(world, table, table_data);
 
     if (data) {
-        table_data = flecs_table_get_or_create_data(table);
-        *table_data = *data;
+        table->storage = *data;
     } else {
-        return;
+        flecs_table_init_data(world, table);
     }
 
     int32_t count = ecs_table_count(table);
@@ -4556,7 +4431,7 @@ int32_t* flecs_table_get_dirty_state(
     ecs_assert(!table->lock, ECS_LOCKED_STORAGE, NULL);
     
     if (!table->dirty_state) {
-        table->dirty_state = ecs_os_calloc(ECS_SIZEOF(int32_t) * (table->column_count + 1));
+        table->dirty_state = ecs_os_calloc_n(int32_t, table->column_count + 1);
         ecs_assert(table->dirty_state != NULL, ECS_INTERNAL_ERROR, NULL);
     }
     return table->dirty_state;
@@ -4631,10 +4506,7 @@ ecs_column_t *ecs_table_column_for_id(
 {
     ecs_table_record_t *tr = flecs_get_table_record(world, table, id);
     if (tr) {
-        ecs_data_t *data = table->data;
-        if (data) {
-            return &data->columns[tr->column];
-        }
+        return &table->storage.columns[tr->column];
     }
 
     return NULL;
@@ -4669,12 +4541,7 @@ void* ecs_record_get_column(
         return NULL;
     }
 
-    ecs_data_t *data = table->data;
-    if (!data) {
-        return NULL;
-    }
-
-    ecs_column_t *c = &data->columns[column];
+    ecs_column_t *c = &table->storage.columns[column];
     if (!c) {
         return NULL;
     }
@@ -4708,8 +4575,7 @@ void* get_component_w_index(
 {
     ecs_assert(column_index < table->column_count, ECS_NOT_A_COMPONENT, NULL);
 
-    ecs_data_t *data = flecs_table_get_data(table);
-    ecs_column_t *column = &data->columns[column_index];
+    ecs_column_t *column = &table->storage.columns[column_index];
 
     /* If size is 0, component does not have a value. This is likely caused by
     * an application trying to call ecs_get with a tag. */
@@ -4839,12 +4705,9 @@ void set_info_from_record(
         return;
     }
 
-    ecs_data_t *data = flecs_table_get_data(table);
-    ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
+    info->data = &table->storage;
 
-    info->data = data;
-
-    ecs_assert(ecs_vector_count(data->entities) > info->row, 
+    ecs_assert(ecs_vector_count(table->storage.entities) > info->row, 
         ECS_INTERNAL_ERROR, NULL);
 }
 
@@ -4994,8 +4857,8 @@ void instantiate_children(
     ecs_table_t * child_table)
 {
     ecs_type_t type = child_table->type;
-    ecs_data_t *child_data = flecs_table_get_data(child_table);
-    if (!child_data || !flecs_table_data_count(child_data)) {
+    ecs_data_t *child_data = &child_table->storage;
+    if (!flecs_table_data_count(child_data)) {
         return;
     }
 
@@ -5087,7 +4950,7 @@ void instantiate_children(
         new_w_data(world, i_table, NULL, child_count, c_info, &child_row);       
 
         /* If prefab child table has children itself, recursively instantiate */
-        ecs_data_t *i_data = flecs_table_get_data(i_table);
+        ecs_data_t *i_data = &i_table->storage;
         for (j = 0; j < child_count; j ++) {
             ecs_entity_t child = children[j];
             instantiate(world, child, i_table, i_data, child_row + j, 1);
@@ -5367,7 +5230,7 @@ int32_t new_entity(
     bool construct)
 {
     ecs_record_t *record = info->record;
-    ecs_data_t *new_data = flecs_table_get_or_create_data(new_table);
+    ecs_data_t *new_data = &new_table->storage;
     int32_t new_row;
 
     ecs_assert(added != NULL, ECS_INTERNAL_ERROR, NULL);
@@ -5414,7 +5277,7 @@ int32_t move_entity(
     ecs_ids_t * removed,
     bool construct)
 {    
-    ecs_data_t *dst_data = flecs_table_get_or_create_data(dst_table);
+    ecs_data_t *dst_data = &dst_table->storage;
     ecs_assert(src_data != dst_data, ECS_INTERNAL_ERROR, NULL);
     ecs_assert(ecs_is_alive(world, entity), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(src_table != NULL, ECS_INTERNAL_ERROR, NULL);
@@ -5673,7 +5536,7 @@ const ecs_entity_t* new_w_data(
         component_array.count = ecs_vector_count(type);
     }
 
-    ecs_data_t *data = flecs_table_get_or_create_data(table);
+    ecs_data_t *data = &table->storage;
     int32_t row = flecs_table_appendn(world, table, data, count, ids);
     ecs_ids_t added = flecs_type_to_ids(type);
     
@@ -7075,15 +6938,15 @@ void remove_from_table(
     } else {
         /* Otherwise, merge table into dst_table */
         if (dst_table != src_table) {
-            ecs_data_t *src_data = flecs_table_get_data(src_table);
+            ecs_data_t *src_data = &src_table->storage;
             int32_t src_count = ecs_table_count(src_table);
-            if (removed.count && src_data) {
+            if (removed.count) {
                 flecs_run_remove_actions(world, src_table, 
                     src_data, 0, src_count, &removed);
             }
 
-            ecs_data_t *dst_data = flecs_table_get_data(dst_table);
-            flecs_table_merge(world, dst_table, src_table, dst_data, src_data);
+            flecs_table_merge(world, dst_table, src_table, 
+                &dst_table->storage, src_data);
         }
     }
 
@@ -7097,7 +6960,7 @@ void delete_objects(
     ecs_world_t *world,
     ecs_table_t *table)
 {
-    ecs_data_t *data = flecs_table_get_data(table);
+    ecs_data_t *data = &table->storage;
     if (data) {
         ecs_entity_t *entities = ecs_vector_first(
             data->entities, ecs_entity_t);
@@ -14481,8 +14344,8 @@ void ecs_get_world_stats(
         /* Singleton tables are tables that have just one entity that also has
          * itself in the table type. */
         if (entity_count == 1) {
-            ecs_data_t *data = flecs_table_get_data(table);
-            ecs_entity_t *entities = ecs_vector_first(data->entities, ecs_entity_t);
+            ecs_entity_t *entities = ecs_vector_first(
+                table->storage.entities, ecs_entity_t);
             if (ecs_type_has_id(world, table->type, entities[0], false)) {
                 singleton_table_count ++;
             }
@@ -14707,6 +14570,13 @@ struct ecs_snapshot_t {
     ecs_filter_t filter;
 };
 
+/** Small footprint data structure for storing data associated with a table. */
+typedef struct ecs_table_leaf_t {
+    ecs_table_t *table;
+    ecs_type_t type;
+    ecs_data_t *data;
+} ecs_table_leaf_t;
+
 static
 ecs_data_t* duplicate_data(
     ecs_world_t *world,
@@ -14808,15 +14678,14 @@ ecs_snapshot_t* snapshot_create(
             continue;
         }
 
-        ecs_data_t *data = flecs_table_get_data(t);
-        if (!data || !data->entities || !ecs_vector_count(data->entities)) {
+        if (!ecs_table_count(t)) {
             continue;
         }
 
         ecs_table_leaf_t *l = ecs_vector_add(&result->tables, ecs_table_leaf_t);
         l->table = t;
         l->type = t->type;
-        l->data = duplicate_data(world, t, data);
+        l->data = duplicate_data(world, t, &t->storage);
     }
 
     return result;
@@ -14898,18 +14767,13 @@ void ecs_snapshot_restore(
                 ecs_vector_each(leaf->data->entities, ecs_entity_t, e_ptr, {
                     ecs_record_t *r = ecs_eis_get(world, *e_ptr);
                     if (r && r->table) {
-                        ecs_data_t *data = flecs_table_get_data(r->table);
-                        
-                        /* Data must be not NULL, otherwise entity index could
-                         * not point to it */
-                        ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
-
                         bool is_monitored;
                         int32_t row = flecs_record_to_row(r->row, &is_monitored);
                         
                         /* Always delete entity, so that even if the entity is
                         * in the current table, there won't be duplicates */
-                        flecs_table_delete(world, r->table, data, row, true);
+                        flecs_table_delete(world, r->table, &table->storage, 
+                            row, true);
                     } else {
                         ecs_eis_set_generation(world, *e_ptr);
                     }
@@ -14918,11 +14782,10 @@ void ecs_snapshot_restore(
                 int32_t old_count = ecs_table_count(table);
                 int32_t new_count = flecs_table_data_count(leaf->data);
 
-                ecs_data_t *data = flecs_table_get_data(table);
-                data = flecs_table_merge(world, table, table, data, leaf->data);
+                flecs_table_merge(world, table, table, &table->storage, leaf->data);
 
                 /* Run OnSet systems for merged entities */
-                flecs_run_set_systems(world, 0, table, data, NULL,
+                flecs_run_set_systems(world, 0, table, &table->storage, NULL,
                     old_count, new_count, true);
 
                 ecs_os_free(leaf->data->columns);
@@ -14940,7 +14803,8 @@ void ecs_snapshot_restore(
              * snapshot was not filtered, clear the table. */
             if (!is_filtered) {
                 /* Clear data of old table. */
-                flecs_table_clear_data(world, table, flecs_table_get_data(table));
+                flecs_table_clear_data(world, table, &table->storage);
+                flecs_table_init_data(world, table);
             }
         }
 
@@ -14954,16 +14818,14 @@ void ecs_snapshot_restore(
      * restoring safe */
     if (!is_filtered) {
         for (t = 0; t < table_count; t ++) {
-            ecs_table_t *table = flecs_sparse_get_dense(world->store.tables, ecs_table_t, t);
+            ecs_table_t *table = flecs_sparse_get_dense(
+                world->store.tables, ecs_table_t, t);
             if (table->flags & EcsTableHasBuiltins) {
                 continue;
             }
-            
-            ecs_data_t *table_data = flecs_table_get_data(table);
-            int32_t entity_count = flecs_table_data_count(table_data);
 
-            flecs_run_set_systems(world, 0, table, 
-                table_data, NULL, 0, entity_count, true);            
+            flecs_run_set_systems(world, 0, table, &table->storage, NULL, 0, 
+                ecs_table_count(table), true);            
         }
     }
 
@@ -19019,7 +18881,7 @@ bool populate_from_column(
             column = tr->column;
         }
 
-        ecs_data_t *data = flecs_table_get_data(table);
+        const ecs_data_t *data = &table->storage;
         ecs_id_t *ids = ecs_vector_first(table->type, ecs_id_t);
 
         /* If there is no data, ensure that iterator won't try to get it */
@@ -19070,15 +18932,9 @@ void populate_from_table(
     it->type = table->type;
     it->count = ecs_table_count(table);
 
-    const ecs_data_t *data = flecs_table_get_data(table);
-
-    if (data) {
-        it->table_columns = data->columns;
-        it->entities = ecs_vector_first(data->entities, ecs_entity_t);
-    } else {
-        it->table_columns = NULL;
-        it->entities = NULL;
-    }
+    const ecs_data_t *data = &table->storage;
+    it->table_columns = data->columns;
+    it->entities = ecs_vector_first(data->entities, ecs_entity_t);
 }
 
 bool flecs_filter_match_table(
@@ -19342,8 +19198,6 @@ bool ecs_term_next(
     ecs_assert(source || !iter->iter_set, ECS_INTERNAL_ERROR, NULL);
     ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
 
-    ecs_data_t *data = flecs_table_get_data(table);
-
     it->table = table;
     it->type = table->type;
     it->ids = &iter->id;
@@ -19352,9 +19206,9 @@ bool ecs_term_next(
     it->sizes = &iter->size;
     it->ptrs = &iter->ptr;
 
-    it->table_columns = data->columns;
+    it->table_columns = &table->storage.columns;
     it->count = ecs_table_count(table);
-    it->entities = ecs_vector_first(data->entities, ecs_entity_t);
+    it->entities = ecs_vector_first(table->storage.entities, ecs_entity_t);
     it->is_valid = true;
 
     bool has_data = populate_from_column(world, table, term->id, tr->column, 
@@ -19534,16 +19388,13 @@ void observer_callback(ecs_iter_t *it) {
     if (flecs_filter_match_table(world, &o->filter, table, type, user_it.ids, 
         user_it.columns, user_it.subjects, user_it.sizes, user_it.ptrs)) 
     {
-        ecs_data_t *data = flecs_table_get_data(table);
-        
         user_it.ids[it->term_index] = it->event_id;
-
         user_it.system = o->entity;
         user_it.term_index = it->term_index;
         user_it.self = o->self;
         user_it.ctx = o->ctx;
         user_it.term_count = o->filter.term_count_actual,
-        user_it.table_columns = data->columns,
+        user_it.table_columns = table->storage.columns,
         o->action(&user_it);
     }
 
@@ -21233,8 +21084,8 @@ void sort_table(
     int32_t column_index,
     ecs_order_by_action_t compare)
 {
-    ecs_data_t *data = flecs_table_get_data(table);
-    if (!data || !data->entities) {
+    ecs_data_t *data = &table->storage;
+    if (!data->entities) {
         /* Nothing to sort */
         return;
     }
@@ -21311,9 +21162,9 @@ void build_sorted_table_range(
     for (i = start; i < end; i ++) {
         ecs_matched_table_t *table_data = &tables[i];
         ecs_table_t *table = table_data->table;
-        ecs_data_t *data = flecs_table_get_data(table);
+        ecs_data_t *data = &table->storage;
         ecs_vector_t *entities;
-        if (!data || !(entities = data->entities) || !ecs_table_count(table)) {
+        if (!(entities = data->entities) || !ecs_table_count(table)) {
             continue;
         }
 
@@ -22591,14 +22442,9 @@ void populate_ptrs(
     ecs_iter_t *it)
 {
     ecs_table_t *table = it->table;
-    const ecs_data_t *data = NULL;
     ecs_column_t *columns = NULL;
-
     if (table) {
-        data = flecs_table_get_data(table);
-    }
-    if (data) {
-        columns = data->columns;
+        columns = table->storage.columns;
     }
 
     int c;
@@ -22650,8 +22496,7 @@ void flecs_query_set_iter(
     ecs_assert(table_data != NULL, ECS_INTERNAL_ERROR, NULL);
 
     ecs_table_t *table = table_data->table;
-    ecs_data_t *data = flecs_table_get_data(table);
-    ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_data_t *data = &table->storage;
     
     ecs_entity_t *entity_buffer = ecs_vector_first(data->entities, ecs_entity_t);  
     it->entities = &entity_buffer[row];
@@ -22747,7 +22592,7 @@ int find_smallest_column(
             ecs_assert(table_column_index >= 1, ECS_INTERNAL_ERROR, NULL);
 
             /* Get the sparse column */
-            ecs_data_t *data = flecs_table_get_data(table);
+            ecs_data_t *data = &table->storage;
             sc = sparse_column->sw_column = 
                 &data->sw_columns[table_column_index - 1];
         }
@@ -22903,10 +22748,9 @@ int bitset_column_next(
         ecs_bs_column_t *bs_column = columns[i].bs_column;
 
         if (!bs_column) {
-            ecs_data_t *data = table->data;
             int32_t index = column->column_index;
             ecs_assert((index - bs_offset >= 0), ECS_INTERNAL_ERROR, NULL);
-            bs_column = &data->bs_columns[index - bs_offset];
+            bs_column = &table->storage.bs_columns[index - bs_offset];
             columns[i].bs_column = bs_column;
         }
         
@@ -23095,8 +22939,7 @@ bool ecs_query_next(
         if (table) {
             ecs_vector_t *bitset_columns = table_data->bitset_columns;
             ecs_vector_t *sparse_columns = table_data->sparse_columns;
-            data = flecs_table_get_data(table);
-            ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
+            data = &table->storage;
             it->table_columns = data->columns;
             
             if (slice) {
@@ -23549,7 +23392,6 @@ void init_table(
 {
     table->type = entities_to_type(entities);
     table->c_info = NULL;
-    table->data = NULL;
     table->flags = 0;
     table->dirty_state = NULL;
     table->monitors = NULL;
@@ -23573,6 +23415,8 @@ void init_table(
 
     flecs_register_table(world, table);
 
+    flecs_table_init_data(world, table);
+
     /* Register component info flags for all columns */
     flecs_table_notify(world, table, &(ecs_table_event_t){
         .kind = EcsTableComponentInfo
@@ -23589,6 +23433,7 @@ ecs_table_t *create_table(
     result->id = flecs_sparse_last_id(world->store.tables);
 
     ecs_assert(result != NULL, ECS_INTERNAL_ERROR, NULL);
+
     init_table(world, result, entities);
 
 #ifndef NDEBUG
@@ -23741,7 +23586,6 @@ int32_t flecs_table_switch_from_case(
     ecs_entity_t add)
 {
     ecs_type_t type = table->type;
-    ecs_data_t *data = flecs_table_get_data(table);
     ecs_entity_t *array = ecs_vector_first(type, ecs_entity_t);
 
     int32_t i, count = table->sw_column_count;
@@ -23751,7 +23595,7 @@ int32_t flecs_table_switch_from_case(
 
     ecs_sw_column_t *sw_columns = NULL;
 
-    if (data && (sw_columns = data->sw_columns)) {
+    if ((sw_columns = table->storage.sw_columns)) {
         /* Fast path, we can get the switch type from the column data */
         for (i = 0; i < count; i ++) {
             ecs_type_t sw_type = sw_columns[i].type;
@@ -25493,16 +25337,14 @@ void _bootstrap_component(
 {
     ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
 
-    ecs_data_t *data = flecs_table_get_or_create_data(table);
-    ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
-
-    ecs_column_t *columns = data->columns;
+    ecs_column_t *columns = table->storage.columns;
     ecs_assert(columns != NULL, ECS_INTERNAL_ERROR, NULL);
 
     ecs_record_t *record = ecs_eis_ensure(world, entity);
     record->table = table;
 
-    int32_t index = flecs_table_append(world, table, data, entity, record, false);
+    int32_t index = flecs_table_append(world, table, &table->storage, 
+        entity, record, false);
     record->row = index + 1;
 
     EcsComponent *component = ecs_vector_first(columns[0].data, EcsComponent);
@@ -25563,14 +25405,11 @@ ecs_table_t* bootstrap_component_table(
     };
 
     ecs_table_t *result = flecs_table_find_or_create(world, &array);
-    ecs_data_t *data = flecs_table_get_or_create_data(result);
+    ecs_data_t *data = &result->storage;
 
     /* Preallocate enough memory for initial components */
     data->entities = ecs_vector_new(ecs_entity_t, EcsFirstUserComponentId);
     data->record_ptrs = ecs_vector_new(ecs_record_t*, EcsFirstUserComponentId);
-
-    data->columns = ecs_os_malloc_n(ecs_column_t, 3);
-    ecs_assert(data->columns != NULL, ECS_OUT_OF_MEMORY, NULL);
 
     data->columns[0].data = ecs_vector_new(EcsComponent, EcsFirstUserComponentId);
     data->columns[0].size = ECS_SIZEOF(EcsComponent);
@@ -25929,10 +25768,8 @@ ecs_entity_t find_child_in_table(
         return 0;
     }
 
-    ecs_data_t *data = flecs_table_get_data(table);
-    if (!data || !data->columns) {
-        return 0;
-    }
+    const ecs_data_t *data = &table->storage;
+    ecs_assert(data->columns != NULL, ECS_INTERNAL_ERROR, NULL);
 
     int32_t i, count = ecs_vector_count(data->entities);
     if (!count) {
