@@ -2667,8 +2667,8 @@ struct ecs_trigger_t {
 struct ecs_observer_t {
     ecs_filter_t filter;
 
-    /* Triggers created by observer (array size same as number of terms) */
-    ecs_entity_t *triggers;
+    /* Triggers created by observer */
+    ecs_vector_t *triggers;
 
     /* Observer events */
     ecs_entity_t events[ECS_TRIGGER_DESC_EVENT_COUNT_MAX];
@@ -14215,7 +14215,7 @@ struct ref {
                 m_world, &m_ref, m_entity, _::cpp_type<T>::id(m_world));    
         }
 
-        return static_cast<T*>(m_ref.ptr);
+        return static_cast<const T*>(m_ref.ptr);
     }
 
     flecs::entity entity() const;
@@ -18708,8 +18708,42 @@ private:
         return ecs_query_next_instanced;
     }
 
+    template < template<typename Func, typename ... Comps> class Invoker, typename Func, typename NextFunc, typename ... Args>
+    void iterate(Func&& func, NextFunc next, Args &&... args) const {
+        ecs_iter_t it = ecs_query_iter(m_world, m_query);
+        it.is_instanced |= Invoker<Func, Components...>::instanced();
+
+        while (next(&it, std::forward<Args>(args)...)) {
+            Invoker<Func, Components...>(func).invoke(&it);
+        }
+    }
+
 public:
     using query_base::query_base;
+    
+    /** Each iterator.
+     * The "each" iterator accepts a function that is invoked for each matching
+     * entity. The following function signatures are valid:
+     *  - func(flecs::entity e, Components& ...)
+     *  - func(Components& ...)
+     * 
+     * Each iterators are automatically instanced.
+    */
+    template <typename Func>
+    void each(Func&& func) const {
+        iterate<_::each_invoker>(std::forward<Func>(func), ecs_query_next_instanced);
+    }
+    
+    /** Iter iterator.
+     * The "iter" iterator accepts a function that is invoked for each matching
+     * table. The following function signatures are valid:
+     *  - func(flecs::entity e, Components& ...)
+     *  - func(Components& ...)
+     */
+    template <typename Func>
+    void iter(Func&& func) const { 
+        iterate<_::iter_invoker>(std::forward<Func>(func), ecs_query_next);
+    }
 };
 
 // Mixin implementation
@@ -19753,12 +19787,7 @@ inline flecs::world iter::world() const {
 
 inline flecs::entity iter::entity(size_t row) const {
     ecs_assert(row < static_cast<size_t>(m_iter->count), ECS_COLUMN_INDEX_OUT_OF_RANGE, NULL);
-    if (!this->world().is_readonly()) {
-        return flecs::entity(m_iter->entities[row])
-            .mut(this->world());
-    } else {
-        return flecs::entity(this->world().c_ptr(), m_iter->entities[row]);
-    }
+    return flecs::entity(this->m_iter->world, m_iter->entities[row]);
 }
 
 template <typename T>
