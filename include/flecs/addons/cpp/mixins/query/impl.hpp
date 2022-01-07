@@ -123,8 +123,42 @@ private:
         return ecs_query_next_instanced;
     }
 
+    template < template<typename Func, typename ... Comps> class Invoker, typename Func, typename NextFunc, typename ... Args>
+    void iterate(Func&& func, NextFunc next, Args &&... args) const {
+        ecs_iter_t it = ecs_query_iter(m_world, m_query);
+        it.is_instanced |= Invoker<Func, Components...>::instanced();
+
+        while (next(&it, std::forward<Args>(args)...)) {
+            Invoker<Func, Components...>(func).invoke(&it);
+        }
+    }
+
 public:
     using query_base::query_base;
+
+    /** Each iterator.
+     * The "each" iterator accepts a function that is invoked for each matching
+     * entity. The following function signatures are valid:
+     *  - func(flecs::entity e, Components& ...)
+     *  - func(Components& ...)
+     * 
+     * Each iterators are automatically instanced.
+    */
+    template <typename Func>
+    void each(Func&& func) const {
+        iterate<_::each_invoker>(std::forward<Func>(func), ecs_query_next_instanced);
+    }
+
+    /** Iter iterator.
+     * The "iter" iterator accepts a function that is invoked for each matching
+     * table. The following function signatures are valid:
+     *  - func(flecs::entity e, Components& ...)
+     *  - func(Components& ...)
+     */
+    template <typename Func>
+    void iter(Func&& func) const { 
+        iterate<_::iter_invoker>(std::forward<Func>(func), ecs_query_next);
+    }
 };
 
 // Mixin implementation

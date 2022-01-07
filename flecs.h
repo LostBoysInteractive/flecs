@@ -14382,7 +14382,7 @@ struct entity_builder : Base {
      * @param value The value to set.
      */
     template <typename R, typename O, typename P = pair<R, O>, 
-        typename A = actual_type_t<P>, if_not_t< is_pair<R>::value> = 0>
+        typename A = actual_type_t<P>, if_not_t< flecs::is_pair<R>::value> = 0>
     Self& set(const A& value) {
         flecs::set<P>(this->m_world, this->m_id, value);
         return to_base();
@@ -15531,10 +15531,12 @@ private:
         }
 #endif
 
-        flecs::iter it(iter);
-        for (auto row : it) {
-            func(it.entity(row),
-                (ColumnType< remove_reference_t<Components> >(comps, row)
+        ecs_world_t *world = iter->world;
+        size_t count = static_cast<size_t>(iter->count);
+
+        for (size_t i = 0; i < count; i ++) {
+            func(flecs::entity(world, iter->entities[i]),
+                (ColumnType< remove_reference_t<Components> >(comps, i)
                     .get_row())...);
         }
 
@@ -18393,8 +18395,42 @@ private:
         return ecs_query_next_instanced;
     }
 
+    template < template<typename Func, typename ... Comps> class Invoker, typename Func, typename NextFunc, typename ... Args>
+    void iterate(Func&& func, NextFunc next, Args &&... args) const {
+        ecs_iter_t it = ecs_query_iter(m_world, m_query);
+        it.is_instanced |= Invoker<Func, Components...>::instanced();
+
+        while (next(&it, std::forward<Args>(args)...)) {
+            Invoker<Func, Components...>(func).invoke(&it);
+        }
+    }
+
 public:
     using query_base::query_base;
+
+    /** Each iterator.
+     * The "each" iterator accepts a function that is invoked for each matching
+     * entity. The following function signatures are valid:
+     *  - func(flecs::entity e, Components& ...)
+     *  - func(Components& ...)
+     * 
+     * Each iterators are automatically instanced.
+    */
+    template <typename Func>
+    void each(Func&& func) const {
+        iterate<_::each_invoker>(std::forward<Func>(func), ecs_query_next_instanced);
+    }
+
+    /** Iter iterator.
+     * The "iter" iterator accepts a function that is invoked for each matching
+     * table. The following function signatures are valid:
+     *  - func(flecs::entity e, Components& ...)
+     *  - func(Components& ...)
+     */
+    template <typename Func>
+    void iter(Func&& func) const { 
+        iterate<_::iter_invoker>(std::forward<Func>(func), ecs_query_next);
+    }
 };
 
 // Mixin implementation
@@ -19410,12 +19446,7 @@ inline flecs::world iter::world() const {
 
 inline flecs::entity iter::entity(size_t row) const {
     ecs_assert(row < static_cast<size_t>(m_iter->count), ECS_COLUMN_INDEX_OUT_OF_RANGE, NULL);
-    if (!this->world().is_readonly()) {
-        return flecs::entity(m_iter->entities[row])
-            .mut(this->world());
-    } else {
-        return flecs::entity(this->world().c_ptr(), m_iter->entities[row]);
-    }
+    return flecs::entity(m_iter->world, m_iter->entities[row]);
 }
 
 template <typename T>
